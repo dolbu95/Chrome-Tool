@@ -6,6 +6,7 @@ import win32api
 import pystray
 from PIL import Image, ImageDraw
 import threading
+import time
 
 class CustomTestTool:
     def __init__(self, root):
@@ -15,6 +16,10 @@ class CustomTestTool:
         
         # Handle window closing to properly exit tray
         self.root.protocol('WM_DELETE_WINDOW', self.on_closing)
+        
+        # Handle minimize button - hide to tray instead
+        self.root.bind('<Unmap>', self.on_minimize)
+        self.minimizing_to_tray = False  # 트레이로 최소화 중인지 구분하기 위한 플래그
 
         self.window_list = []
         self.selected_hwnd = None
@@ -37,10 +42,30 @@ class CustomTestTool:
         # Refresh Button
         ttk.Button(control_frame, text="Refresh List", command=self.refresh_list).pack(pady=5)
 
-        # Listbox for windows
-        self.listbox = tk.Listbox(control_frame, height=10)
-        self.listbox.pack(fill=tk.BOTH, expand=True, pady=5)
-        self.listbox.bind('<<ListboxSelect>>', self.on_select)
+        # Treeview for windows with status
+        tree_frame = ttk.Frame(control_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(tree_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Configure Treeview with columns
+        self.tree = ttk.Treeview(tree_frame, columns=('transparency', 'taskbar'), show='tree headings', height=10, yscrollcommand=scrollbar.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.tree.yview)
+        
+        # Column headers
+        self.tree.heading('#0', text='Window Name')
+        self.tree.heading('transparency', text='Opacity')
+        self.tree.heading('taskbar', text='Taskbar')
+        
+        # Column widths
+        self.tree.column('#0', width=200, minwidth=150)
+        self.tree.column('transparency', width=80, minwidth=60, anchor='center')
+        self.tree.column('taskbar', width=80, minwidth=60, anchor='center')
+        
+        self.tree.bind('<<TreeviewSelect>>', self.on_select)
 
         # Test Level Slider (Opacity)
         # Range 0-255, where 255 is fully opaque
@@ -56,9 +81,6 @@ class CustomTestTool:
         # Taskbar Visibility Checkbox
         self.taskbar_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(control_frame, text="Show in Taskbar", variable=self.taskbar_var, command=self.toggle_taskbar).pack(pady=5)
-
-        # Minimize to Tray Button
-        ttk.Button(control_frame, text="Minimize to Tray", command=self.minimize_to_tray).pack(pady=5)
 
         # Developer Info
         ttk.Label(control_frame, text="developed by 부트띠", font=("Arial", 8), foreground="gray").pack(pady=(10, 0))
@@ -77,8 +99,24 @@ class CustomTestTool:
         dc.rectangle((0, height // 2, width // 2, height), fill=color2)
         return image
 
+    def on_minimize(self, event):
+        """창 최소화 버튼 클릭 시 트레이로 숨기기"""
+        # withdraw() 호출 시에도 Unmap 이벤트가 발생하므로 플래그로 구분
+        if event.widget == self.root and not self.minimizing_to_tray:
+            # 사용자가 최소화 버튼을 누른 경우
+            if self.root.state() == 'iconic':
+                # 이미 최소화된 상태라면 트레이로 숨기기
+                self.root.after(10, self.minimize_to_tray)
+
     def minimize_to_tray(self):
+        self.minimizing_to_tray = True  # 플래그 설정
         self.root.withdraw()  # Hide the window
+        
+        # 트레이 아이콘이 이미 실행 중이면 다시 만들지 않음
+        if self.tray_icon and self.tray_icon._running:
+            self.minimizing_to_tray = False
+            return
+            
         image = self.create_icon()
         menu = (pystray.MenuItem('Restore', self.restore_from_tray, default=True),
                 pystray.MenuItem('Quit', self.quit_app))
@@ -86,6 +124,7 @@ class CustomTestTool:
         
         # Run tray icon in a separate thread to not block tkinter
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
+        self.minimizing_to_tray = False  # 플래그 해제
 
     def restore_from_tray(self, icon, item):
         self.tray_icon.stop()
@@ -100,8 +139,52 @@ class CustomTestTool:
             self.tray_icon.stop()
         self.root.destroy()
 
+    def get_window_opacity(self, hwnd):
+        """Get current window opacity (0-255)"""
+        try:
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            if style & win32con.WS_EX_LAYERED:
+                # Window has layered style, try to get alpha value
+                # Note: There's no direct API to get the alpha, so we return 255 as default
+                return 255
+            return 255
+        except:
+            return 255
+
+    def get_taskbar_status(self, hwnd):
+        """Check if window is shown in taskbar"""
+        try:
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            is_toolwindow = bool(style & win32con.WS_EX_TOOLWINDOW)
+            return "Hidden" if is_toolwindow else "Shown"
+        except:
+            return "Shown"
+
+    def update_selected_tree_item(self):
+        """Update the tree item for the currently selected window"""
+        if not self.selected_hwnd:
+            return
+            
+        # Find the index of the selected window
+        for i, (title, hwnd) in enumerate(self.window_list):
+            if hwnd == self.selected_hwnd:
+                # Get the tree item at this index
+                items = self.tree.get_children()
+                if i < len(items):
+                    item = items[i]
+                    
+                    # Get current status
+                    opacity_percent = int((self.level_var.get() / 255) * 100)
+                    taskbar_status = self.get_taskbar_status(hwnd)
+                    
+                    # Update the tree item
+                    self.tree.item(item, values=(f'{opacity_percent}%', taskbar_status))
+                break
+
     def refresh_list(self):
-        self.listbox.delete(0, tk.END)
+        # Clear tree
+        for item in self.tree.get_children():
+            self.tree.delete(item)
         self.window_list = []
         filter_text = self.filter_var.get().lower()
         
@@ -109,20 +192,28 @@ class CustomTestTool:
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd)
                 if title:
-                    # print(f"Found window: {title}") # Debug print
                     if filter_text in title.lower():
                         self.window_list.append((title, hwnd))
-                        self.listbox.insert(tk.END, title)
+                        
+                        # Get status
+                        opacity = self.get_window_opacity(hwnd)
+                        opacity_percent = int((opacity / 255) * 100)
+                        taskbar_status = self.get_taskbar_status(hwnd)
+                        
+                        # Insert into tree
+                        self.tree.insert('', 'end', text=title, values=(f'{opacity_percent}%', taskbar_status))
         
         win32gui.EnumWindows(enum_handler, None)
 
     def on_select(self, event):
-        selection = self.listbox.curselection()
+        selection = self.tree.selection()
         if selection:
-            index = selection[0]
+            # Get the index of the selected item
+            item = selection[0]
+            index = self.tree.index(item)
             self.selected_hwnd = self.window_list[index][1]
-            # Reset slider to opaque when selecting new window, or try to get current alpha if possible
-            # For simplicity, we'll just set it to current slider value or max
+            
+            # Update slider to current opacity
             self.update_level(self.level_var.get())
             
             # Update taskbar checkbox based on current state
@@ -138,6 +229,13 @@ class CustomTestTool:
         if self.selected_hwnd:
             try:
                 hwnd = self.selected_hwnd
+                
+                # Save current window position and size
+                rect = win32gui.GetWindowRect(hwnd)
+                x, y, right, bottom = rect
+                width = right - x
+                height = bottom - y
+                
                 style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
                 
                 if self.taskbar_var.get():
@@ -150,7 +248,14 @@ class CustomTestTool:
                 # Need to hide/show to apply style change for taskbar
                 win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
                 win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, new_style)
-                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+                
+                # Restore window position and size
+                win32gui.SetWindowPos(hwnd, 0, x, y, width, height, 
+                                     win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+                
+                # Update tree display
+                self.update_selected_tree_item()
             except Exception as e:
                 print(f"Error toggling taskbar: {e}")
 
@@ -169,6 +274,9 @@ class CustomTestTool:
                 
                 # Set transparency (LWA_ALPHA = 0x2)
                 win32gui.SetLayeredWindowAttributes(hwnd, 0, level, win32con.LWA_ALPHA)
+                
+                # Update tree display
+                self.update_selected_tree_item()
             except Exception as e:
                 print(f"Error updating level: {e}")
 
