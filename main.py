@@ -34,7 +34,7 @@ class CustomTestTool:
         filter_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT)
-        self.filter_var = tk.StringVar(value="Chrome")
+        self.filter_var = tk.StringVar(value="")
         self.filter_entry = ttk.Entry(filter_frame, textvariable=self.filter_var)
         self.filter_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self.filter_entry.bind('<Return>', lambda e: self.refresh_list())
