@@ -1,8 +1,9 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import win32gui
 import win32con
 import win32api
+import win32event
 import pystray
 from PIL import Image, ImageDraw
 import threading
@@ -283,6 +284,23 @@ class CustomTestTool:
                 print(f"Error updating level: {e}")
 
 if __name__ == "__main__":
+    # Single instance check using mutex
+    mutex_name = "Global\\CustomTestToolMutex"
+    mutex = win32event.CreateMutex(None, False, mutex_name)
+    last_error = win32api.GetLastError()
+    
+    if last_error == 183:  # ERROR_ALREADY_EXISTS
+        # Another instance is already running
+        root = tk.Tk()
+        root.withdraw()  # Hide the main window
+        messagebox.showwarning("Already Running", "Tool is already running!")
+        root.destroy()
+        import sys
+        sys.exit(0)
+    
     root = tk.Tk()
     app = CustomTestTool(root)
     root.mainloop()
+    
+    # Release mutex on exit
+    win32api.CloseHandle(mutex)
