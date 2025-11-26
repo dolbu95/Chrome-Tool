@@ -24,6 +24,9 @@ class CustomTestTool:
         self.window_list = []
         self.selected_hwnd = None
         self.tray_icon = None
+        
+        # Store opacity settings for each window (hwnd -> opacity value 0-255)
+        self.window_opacity_settings = {}
 
         # Frame for controls
         control_frame = ttk.Frame(root, padding="10")
@@ -135,9 +138,8 @@ class CustomTestTool:
         self.root.after(0, self.root.destroy)
 
     def on_closing(self):
-        if self.tray_icon:
-            self.tray_icon.stop()
-        self.root.destroy()
+        """X 버튼 클릭 시 트레이로 숨김 (종료하지 않음)"""
+        self.minimize_to_tray()
 
     def get_window_opacity(self, hwnd):
         """Get current window opacity (0-255)"""
@@ -213,8 +215,9 @@ class CustomTestTool:
             index = self.tree.index(item)
             self.selected_hwnd = self.window_list[index][1]
             
-            # Update slider to current opacity
-            self.update_level(self.level_var.get())
+            # Load saved opacity for this window (default to 255 if not set)
+            saved_opacity = self.window_opacity_settings.get(self.selected_hwnd, 255)
+            self.level_var.set(saved_opacity)
             
             # Update taskbar checkbox based on current state
             try:
@@ -230,11 +233,8 @@ class CustomTestTool:
             try:
                 hwnd = self.selected_hwnd
                 
-                # Save current window position and size
-                rect = win32gui.GetWindowRect(hwnd)
-                x, y, right, bottom = rect
-                width = right - x
-                height = bottom - y
+                # Save current window placement (includes position, size, and state)
+                placement = win32gui.GetWindowPlacement(hwnd)
                 
                 style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
                 
@@ -250,9 +250,8 @@ class CustomTestTool:
                 win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, new_style)
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
                 
-                # Restore window position and size
-                win32gui.SetWindowPos(hwnd, 0, x, y, width, height, 
-                                     win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+                # Restore window placement (position, size, and state)
+                win32gui.SetWindowPlacement(hwnd, placement)
                 
                 # Update tree display
                 self.update_selected_tree_item()
@@ -264,6 +263,9 @@ class CustomTestTool:
             try:
                 level = int(float(val))
                 hwnd = self.selected_hwnd
+                
+                # Save this opacity setting for this window
+                self.window_opacity_settings[hwnd] = level
                 
                 # Get current window style
                 style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
