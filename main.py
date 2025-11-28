@@ -8,6 +8,7 @@ import pystray
 from PIL import Image, ImageDraw
 import threading
 import time
+import keyboard
 
 class CustomTestTool:
     def __init__(self, root):
@@ -28,6 +29,9 @@ class CustomTestTool:
         self.window_list = []
         self.selected_hwnd = None
         self.tray_icon = None
+        
+        # Hotkey Target Window
+        self.hotkey_target_hwnd = None
         
         # Store opacity settings for each window (hwnd -> opacity value 0-255)
         self.window_opacity_settings = {}
@@ -58,7 +62,13 @@ class CustomTestTool:
         center_frame.pack(anchor=tk.CENTER)
         
         ttk.Button(center_frame, text="새로고침", command=self.refresh_list).pack(side=tk.LEFT, padx=5)
+        ttk.Button(center_frame, text="단축키 대상 지정", command=self.set_hotkey_target_from_selection).pack(side=tk.LEFT, padx=5)
+        ttk.Button(center_frame, text="단축키 재시작", command=self.manual_reset_hotkeys).pack(side=tk.LEFT, padx=5)
         ttk.Button(center_frame, text="작업표시줄 숨김 일괄 해제", command=self.restore_all_windows).pack(side=tk.LEFT, padx=5)
+
+        # Hotkey Target Info
+        self.target_label_var = tk.StringVar(value="단축키 대상: 없음 (목록 선택 후 버튼 클릭)")
+        ttk.Label(control_frame, textvariable=self.target_label_var, foreground="blue", font=("Malgun Gothic", 9)).pack(pady=2)
 
         # Treeview for windows with status
         tree_frame = ttk.Frame(control_frame)
@@ -104,19 +114,172 @@ class CustomTestTool:
         # Developer Info
         ttk.Label(control_frame, text="developed by 부트띠", font=("Arial", 8), foreground="gray").pack(pady=(10, 0))
         
+        # Set Window Icon (Taskbar & Titlebar)
+        try:
+            # 1. Set AppUserModelID to ensure Windows treats this as a standalone app
+            import ctypes
+            myappid = 'mycompany.myproduct.subproduct.version' # arbitrary string
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            
+            # 2. Use .ico for Windows Taskbar
+            self.root.iconbitmap("app_icon.ico")
+            
+            # 3. Use .png for Titlebar (optional, but good for internal windows)
+            icon_image = tk.PhotoImage(file="app_icon.png")
+            self.root.iconphoto(True, icon_image)
+        except Exception as e:
+            print(f"Failed to load window icon: {e}")
+
+        # Setup hotkeys (may fail in admin mode or due to conflicts)
+        try:
+            self.setup_hotkeys()
+            # Start Hotkey Watchdog
+            self.running = True
+            self.start_hotkey_watchdog()
+            print("Hotkeys registered successfully")
+        except Exception as e:
+            print(f"Warning: Hotkeys failed to register: {e}")
+            print("GUI will work, but hotkeys won't be available")
+            self.running = False
+        
         self.refresh_list()
 
+    def start_hotkey_watchdog(self):
+        """Start a background thread to re-register hotkeys periodically"""
+        def watchdog_loop():
+            while self.running:
+                time.sleep(10) # Check every 10 seconds for faster recovery
+                if self.running:
+                    self.reset_hotkeys()
+                    
+        threading.Thread(target=watchdog_loop, daemon=True).start()
+
+    def manual_reset_hotkeys(self):
+        """Manually reset hotkeys via button click"""
+        self.reset_hotkeys()
+        messagebox.showinfo("완료", "단축키 연결을 재시작했습니다.\n다시 사용해보세요.")
+
+    def reset_hotkeys(self):
+        """Safely reset all hotkeys"""
+        try:
+            keyboard.unhook_all()
+            self.setup_hotkeys()
+            # print("Hotkeys refreshed by watchdog") # Debug
+        except Exception as e:
+            print(f"Hotkey reset failed: {e}")
+
+    def setup_hotkeys(self):
+        """Setup global hotkeys for window control"""
+        try:
+            # Register Target: Shift+0 OR Alt+0
+            keyboard.add_hotkey('shift+0', self.on_hotkey_register)
+            keyboard.add_hotkey('alt+0', self.on_hotkey_register)
+            
+            # Hide Target: Ctrl+1 OR Alt+1
+            keyboard.add_hotkey('ctrl+1', self.on_hotkey_hide)
+            keyboard.add_hotkey('alt+1', self.on_hotkey_hide)
+            
+            # Show Target: Ctrl+2 OR Alt+2
+            keyboard.add_hotkey('ctrl+2', self.on_hotkey_show)
+            keyboard.add_hotkey('alt+2', self.on_hotkey_show)
+            
+            # Force Hide Target: Ctrl+3 OR Alt+3
+            keyboard.add_hotkey('ctrl+3', self.on_hotkey_hide)
+            keyboard.add_hotkey('alt+3', self.on_hotkey_hide)
+        except Exception as e:
+            print(f"Failed to setup hotkeys: {e}")
+
+    def on_hotkey_register(self):
+        """Register the currently active window as target"""
+        try:
+            hwnd = win32gui.GetForegroundWindow()
+            title = win32gui.GetWindowText(hwnd)
+            self.hotkey_target_hwnd = hwnd
+            print(f"Target Registered: [{hwnd}] {title}")
+            
+            # Update UI label if possible (thread safety check might be needed but usually ok for simple var set)
+            try:
+                self.target_label_var.set(f"단축키 대상: {title}")
+            except:
+                pass
+        except Exception as e:
+            print(f"Error registering target: {e}")
+            
+    # ... (hide/show methods remain same) ...
+
+    def set_hotkey_target_from_selection(self):
+        """Set the hotkey target to the currently selected window in the list"""
+        if not self.selected_hwnd:
+            messagebox.showwarning("경고", "먼저 목록에서 창을 선택해주세요.")
+            return
+            
+        self.hotkey_target_hwnd = self.selected_hwnd
+        
+        # Get title for display
+        title = ""
+        for t, h in self.window_list:
+            if h == self.hotkey_target_hwnd:
+                title = t
+                break
+                
+        self.target_label_var.set(f"단축키 대상: {title}")
+        messagebox.showinfo("설정 완료", f"단축키 대상이 설정되었습니다.\n[{title}]\n\n[사용법]\n숨김: Ctrl+1 또는 Alt+1\n보임: Ctrl+2 또는 Alt+2")
+
+    def on_hotkey_hide(self):
+        """Hide the registered target window"""
+        if self.hotkey_target_hwnd:
+            # Validate window handle
+            if not win32gui.IsWindow(self.hotkey_target_hwnd):
+                print("Target window invalid.")
+                try:
+                    self.target_label_var.set("단축키 대상: 없음 (창 사라짐)")
+                except:
+                    pass
+                self.hotkey_target_hwnd = None
+                return
+
+            try:
+                win32gui.ShowWindow(self.hotkey_target_hwnd, win32con.SW_HIDE)
+                self.hidden_windows.add(self.hotkey_target_hwnd) # Track it so we can restore on exit
+            except Exception as e:
+                print(f"Error hiding target: {e}")
+
+    def on_hotkey_show(self):
+        """Show the registered target window"""
+        if self.hotkey_target_hwnd:
+            # Validate window handle
+            if not win32gui.IsWindow(self.hotkey_target_hwnd):
+                print("Target window invalid.")
+                try:
+                    self.target_label_var.set("단축키 대상: 없음 (창 사라짐)")
+                except:
+                    pass
+                self.hotkey_target_hwnd = None
+                return
+
+            try:
+                win32gui.ShowWindow(self.hotkey_target_hwnd, win32con.SW_SHOW)
+                if self.hotkey_target_hwnd in self.hidden_windows:
+                    self.hidden_windows.remove(self.hotkey_target_hwnd)
+            except Exception as e:
+                print(f"Error showing target: {e}")
+
     def create_icon(self):
-        # Create a simple icon dynamically
-        width = 64
-        height = 64
-        color1 = "black"
-        color2 = "white"
-        image = Image.new('RGB', (width, height), color1)
-        dc = ImageDraw.Draw(image)
-        dc.rectangle((width // 2, 0, width, height // 2), fill=color2)
-        dc.rectangle((0, height // 2, width // 2, height), fill=color2)
-        return image
+        # Load the custom app icon for the tray
+        try:
+            image = Image.open("app_icon.png")
+            return image
+        except:
+            # Fallback to simple dynamic icon if file missing
+            width = 64
+            height = 64
+            color1 = "black"
+            color2 = "white"
+            image = Image.new('RGB', (width, height), color1)
+            dc = ImageDraw.Draw(image)
+            dc.rectangle((width // 2, 0, width, height // 2), fill=color2)
+            dc.rectangle((0, height // 2, width // 2, height), fill=color2)
+            return image
 
     def on_minimize(self, event):
         """창 최소화 버튼 클릭 시 트레이로 숨기기"""
@@ -190,6 +353,8 @@ class CustomTestTool:
 
     def perform_exit(self):
         """Actual exit logic to be run on main thread"""
+        self.running = False
+        
         # Restore all hidden windows before exit
         if self.hidden_windows:
             for hwnd in list(self.hidden_windows):
@@ -217,6 +382,11 @@ class CustomTestTool:
         
         if self.tray_icon:
             self.tray_icon.stop()
+            
+        try:
+            keyboard.unhook_all()
+        except:
+            pass
             
         self.root.destroy()
 
@@ -396,9 +566,15 @@ class CustomTestTool:
         try:
             style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
             if style & win32con.WS_EX_LAYERED:
-                # Window has layered style, try to get alpha value
-                # Note: There's no direct API to get the alpha, so we return 255 as default
-                return 255
+                # Window has layered style, get actual alpha value
+                try:
+                    # GetLayeredWindowAttributes returns (crKey, alpha, flags)
+                    _, alpha, flags = win32gui.GetLayeredWindowAttributes(hwnd)
+                    # LWA_ALPHA = 0x2, check if alpha flag is set
+                    if flags & 0x2:
+                        return alpha
+                except:
+                    pass
             return 255
         except:
             return 255
@@ -438,6 +614,9 @@ class CustomTestTool:
                 break
 
     def refresh_list(self):
+        # Re-register hotkeys to prevent timeout issues
+        self.reset_hotkeys()
+
         # Clear tree
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -473,9 +652,9 @@ class CustomTestTool:
             window_title = self.window_list[index][0]
             is_self = (window_title == "Custom Test Tool")
             
-            # Load saved opacity for this window (default to 255 if not set)
-            saved_opacity = self.window_opacity_settings.get(self.selected_hwnd, 255)
-            self.level_var.set(saved_opacity)
+            # Read actual opacity from the window (not from saved settings)
+            actual_opacity = self.get_window_opacity(self.selected_hwnd)
+            self.level_var.set(actual_opacity)
             
             # Update taskbar checkbox based on current state
             try:
@@ -494,6 +673,24 @@ class CustomTestTool:
                 self.taskbar_checkbox.config(state='disabled')
             else:
                 self.taskbar_checkbox.config(state='normal')
+
+    def set_hotkey_target_from_selection(self):
+        """Set the hotkey target to the currently selected window in the list"""
+        if not self.selected_hwnd:
+            messagebox.showwarning("경고", "먼저 목록에서 창을 선택해주세요.")
+            return
+            
+        self.hotkey_target_hwnd = self.selected_hwnd
+        
+        # Get title for display
+        title = ""
+        for t, h in self.window_list:
+            if h == self.hotkey_target_hwnd:
+                title = t
+                break
+                
+        self.target_label_var.set(f"단축키 대상: {title}")
+        messagebox.showinfo("설정 완료", f"단축키 대상이 설정되었습니다.\n[{title}]\n\n[사용법]\n숨김: Ctrl+1 또는 Alt+1\n보임: Ctrl+2 또는 Alt+2")
 
     def update_level(self, val):
         if self.selected_hwnd:
