@@ -63,7 +63,6 @@ class CustomTestTool:
         
         ttk.Button(center_frame, text="새로고침", command=self.refresh_list).pack(side=tk.LEFT, padx=5)
         ttk.Button(center_frame, text="단축키 대상 지정", command=self.set_hotkey_target_from_selection).pack(side=tk.LEFT, padx=5)
-        ttk.Button(center_frame, text="단축키 재시작", command=self.manual_reset_hotkeys).pack(side=tk.LEFT, padx=5)
         ttk.Button(center_frame, text="작업표시줄 숨김 일괄 해제", command=self.restore_all_windows).pack(side=tk.LEFT, padx=5)
 
         # Hotkey Target Info
@@ -153,11 +152,6 @@ class CustomTestTool:
                     self.reset_hotkeys()
                     
         threading.Thread(target=watchdog_loop, daemon=True).start()
-
-    def manual_reset_hotkeys(self):
-        """Manually reset hotkeys via button click"""
-        self.reset_hotkeys()
-        messagebox.showinfo("완료", "단축키 연결을 재시작했습니다.\n다시 사용해보세요.")
 
     def reset_hotkeys(self):
         """Safely reset all hotkeys"""
